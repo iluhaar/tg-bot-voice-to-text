@@ -1,0 +1,9 @@
+name = "voice-to-text-bot"
+main = "src/worker.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+# You'll need to set these in the Cloudflare dashboard or via wrangler
+# BOT_TOKEN = "your-telegram-bot-token"
+# OPENAI_API_KEY = "your-openai-api-key"
+# ALLOWED_CHAT_ID = "your-telegram-chat-id" # Get this by sending /chatid to @RawDataBot on Telegram 
