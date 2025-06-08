@@ -127,20 +127,21 @@ async function handleRequest(request) {
       return new Response("OK");
     }
 
-    // Handle voice messages
-    if (message?.voice) {
+    // Handle voice messages and video notes
+    if (message?.voice || message?.video_note) {
       try {
         // Send processing message
         await sendTelegramMessage(
           chatId,
-          "🎵 Processing your voice message..."
+          "🎵 Processing your audio message..."
         );
 
-        // Download voice file
-        const audioData = await downloadVoiceFile(message.voice.file_id);
+        // Download audio file
+        const fileId = message.voice?.file_id || message.video_note?.file_id;
+        const audioData = await downloadVoiceFile(fileId);
         await sendTelegramMessage(
           chatId,
-          `📥 Voice file received:\n` +
+          `📥 Audio file received:\n` +
             `Size: ${(audioData.size / 1024).toFixed(2)} KB\n` +
             `Format: ${audioData.format}`
         );
@@ -161,9 +162,9 @@ async function handleRequest(request) {
         let errorMessage = "❌ Error Details:\n";
 
         if (error.message.includes("File Info Error")) {
-          errorMessage += "⚠️ Failed to get voice message from Telegram\n";
+          errorMessage += "⚠️ Failed to get audio message from Telegram\n";
         } else if (error.message.includes("Download Error")) {
-          errorMessage += "⚠️ Failed to download the voice file\n";
+          errorMessage += "⚠️ Failed to download the audio file\n";
         } else if (error.message.includes("API Response Parse Error")) {
           errorMessage += "⚠️ Invalid response from transcription service\n";
         } else if (error.message.includes("Transcription API Error")) {
