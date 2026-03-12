@@ -109,8 +109,9 @@ async function handleRequest(request) {
     }
 
     // Check if the chat ID matches the allowed ID
-    const allowedChatId = ALLOWED_CHAT_ID;
-    if (chatId.toString() !== allowedChatId) {
+    const allowedChatIds = [ALLOWED_CHAT_ID,HANNA_ID];
+
+    if (!allowedChatIds.includes(chatId.toString())) {
       await sendTelegramMessage(
         chatId,
         "⚠️ Sorry, you are not authorized to use this bot. Please contact the administrator for access."
