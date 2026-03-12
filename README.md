@@ -1,6 +1,6 @@
 # Voice-to-Text Telegram Bot (Cloudflare Workers)
 
-A serverless Telegram bot that converts voice messages to text using OpenAI's Whisper API, deployed on Cloudflare Workers.
+A serverless Telegram bot that converts voice and circle video messages to text using OpenAI's Whisper API, deployed on Cloudflare Workers.
 
 ## Prerequisites
 
@@ -30,6 +30,7 @@ wrangler login
 wrangler secret put BOT_TOKEN
 wrangler secret put OPENAI_API_KEY
 wrangler secret put ALLOWED_CHAT_ID  # Your Telegram chat ID for access control
+wrangler secret put HANNA_ID # Your Telegram chat ID for access control
 ```
 
 4. Set up your Telegram bot webhook:
