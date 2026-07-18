@@ -41,6 +41,11 @@ The D1 database is configured as the `users_binding` binding in `wrangler.toml`.
 successful transcription creates or updates the Telegram user and increments
 their `usage_count`.
 
+## Security Features
+
+- **Environment Variables**: All sensitive data is stored securely in Cloudflare Workers
+- **Webhook-only**: The bot only processes messages received through the webhook
+
 ## Deployment
 
 Deploy to Cloudflare Workers:
