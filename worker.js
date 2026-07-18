@@ -95,6 +95,34 @@ async function sendTelegramMessage(chatId, text) {
   }
 }
 
+async function recordUserUsage(user) {
+  await DB.prepare(
+    `INSERT INTO users (
+      telegram_user_id,
+      username,
+      first_name,
+      last_name,
+      language_code,
+      usage_count
+    ) VALUES (?, ?, ?, ?, ?, 1)
+    ON CONFLICT (telegram_user_id) DO UPDATE SET
+      username = excluded.username,
+      first_name = excluded.first_name,
+      last_name = excluded.last_name,
+      language_code = excluded.language_code,
+      usage_count = users.usage_count + 1,
+      last_used_at = CURRENT_TIMESTAMP`
+  )
+    .bind(
+      user.id.toString(),
+      user.username || null,
+      user.first_name || null,
+      user.last_name || null,
+      user.language_code || null
+    )
+    .run();
+}
+
 async function handleRequest(request) {
   if (request.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -106,17 +134,6 @@ async function handleRequest(request) {
 
     if (!chatId) {
       return new Response("Missing chat ID", { status: 400 });
-    }
-
-    // Check if the chat ID matches the allowed ID
-    const allowedChatIds = [ALLOWED_CHAT_ID,HANNA_ID];
-
-    if (!allowedChatIds.includes(chatId.toString())) {
-      await sendTelegramMessage(
-        chatId,
-        "⚠️ Sorry, you are not authorized to use this bot. Please contact the administrator for access."
-      );
-      return new Response("Unauthorized", { status: 403 });
     }
 
     // Handle /start command
@@ -153,6 +170,7 @@ async function handleRequest(request) {
           "🔄 Sending to OpenAI for transcription..."
         );
         const transcription = await transcribeAudio(audioData);
+        await recordUserUsage(message.from);
 
         // Send transcription back
         await sendTelegramMessage(

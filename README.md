@@ -8,7 +8,7 @@ A serverless Telegram bot that converts voice and circle video messages to text 
 - Wrangler CLI (`npm install -g wrangler`)
 - A Telegram Bot Token (get it from [@BotFather](https://t.me/botfather))
 - An OpenAI API Key
-- Your Telegram Chat ID (get it from [@RawDataBot](https://t.me/RawDataBot) by sending it any message)
+- A Cloudflare D1 database with a `users` table
 
 ## Setup
 
@@ -29,8 +29,6 @@ wrangler login
 ```bash
 wrangler secret put BOT_TOKEN
 wrangler secret put OPENAI_API_KEY
-wrangler secret put ALLOWED_CHAT_ID  # Your Telegram chat ID for access control
-wrangler secret put HANNA_ID # Your Telegram chat ID for access control
 ```
 
 4. Set up your Telegram bot webhook:
@@ -39,11 +37,9 @@ wrangler secret put HANNA_ID # Your Telegram chat ID for access control
 https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 ```
 
-## Security Features
-
-- **Chat ID Restriction**: The bot only responds to messages from a specific Telegram chat ID
-- **Environment Variables**: All sensitive data is stored securely in Cloudflare Workers
-- **Webhook-only**: The bot only processes messages received through the webhook
+The D1 database is configured as the `DB` binding in `wrangler.toml`. Each
+successful transcription creates or updates the Telegram user and increments
+their `usage_count`.
 
 ## Deployment
 
@@ -60,15 +56,14 @@ wrangler deploy
 - No dependencies required
 - Minimal resource usage
 - Automatic scaling
-- Secure access control via chat ID verification
+- Stores user profiles and usage counts in Cloudflare D1
 
 ## How it Works
 
 1. The bot receives a voice message through Telegram's webhook
-2. Verifies the sender's chat ID against the allowed ID
-3. Downloads the voice file using Telegram's getFile API
-4. Sends the audio file to OpenAI's Whisper API for transcription
-5. Returns the transcribed text to the user
+2. Downloads the voice file using Telegram's getFile API
+3. Sends the audio file to OpenAI's Whisper API for transcription
+4. Returns the transcribed text to the user
 
 ## Security Notes
 
@@ -76,4 +71,3 @@ wrangler deploy
 - No file system access required
 - All processing happens in memory
 - Automatic HTTPS handling by Cloudflare
-- Access restricted to authorized chat ID only
