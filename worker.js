@@ -1,9 +1,11 @@
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
-});
+export default {
+  fetch(request, env) {
+    return handleRequest(request, env);
+  },
+};
 
-async function downloadVoiceFile(fileId) {
-  const getFileUrl = `https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`;
+async function downloadVoiceFile(fileId, env) {
+  const getFileUrl = `https://api.telegram.org/bot${env.BOT_TOKEN}/getFile?file_id=${fileId}`;
   const fileInfo = await fetch(getFileUrl).then((res) => res.json());
 
   if (!fileInfo.ok) {
@@ -13,7 +15,7 @@ async function downloadVoiceFile(fileId) {
   }
 
   const filePath = fileInfo.result.file_path;
-  const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+  const fileUrl = `https://api.telegram.org/file/bot${env.BOT_TOKEN}/${filePath}`;
   const response = await fetch(fileUrl);
 
   if (!response.ok) {
@@ -30,7 +32,7 @@ async function downloadVoiceFile(fileId) {
   };
 }
 
-async function transcribeAudio(audioData) {
+async function transcribeAudio(audioData, env) {
   const formData = new FormData();
   const audioBlob = new Blob([audioData.buffer], { type: "audio/ogg" });
   formData.append("file", audioBlob, "voice.oga");
@@ -41,7 +43,7 @@ async function transcribeAudio(audioData) {
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
       },
       body: formData,
     }
@@ -73,8 +75,8 @@ async function transcribeAudio(audioData) {
   return result.text;
 }
 
-async function sendTelegramMessage(chatId, text) {
-  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
+async function sendTelegramMessage(chatId, text, env) {
+  const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`;
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -95,7 +97,35 @@ async function sendTelegramMessage(chatId, text) {
   }
 }
 
-async function handleRequest(request) {
+async function recordUserUsage(user, env) {
+  await env.users_binding.prepare(
+    `INSERT INTO users (
+      telegram_user_id,
+      username,
+      first_name,
+      last_name,
+      language_code,
+      usage_count
+    ) VALUES (?, ?, ?, ?, ?, 1)
+    ON CONFLICT (telegram_user_id) DO UPDATE SET
+      username = excluded.username,
+      first_name = excluded.first_name,
+      last_name = excluded.last_name,
+      language_code = excluded.language_code,
+      usage_count = users.usage_count + 1,
+      last_used_at = CURRENT_TIMESTAMP`
+  )
+    .bind(
+      user.id.toString(),
+      user.username || null,
+      user.first_name || null,
+      user.last_name || null,
+      user.language_code || null
+    )
+    .run();
+}
+
+async function handleRequest(request, env) {
   if (request.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -108,22 +138,12 @@ async function handleRequest(request) {
       return new Response("Missing chat ID", { status: 400 });
     }
 
-    // Check if the chat ID matches the allowed ID
-    const allowedChatIds = [ALLOWED_CHAT_ID,HANNA_ID];
-
-    if (!allowedChatIds.includes(chatId.toString())) {
-      await sendTelegramMessage(
-        chatId,
-        "⚠️ Sorry, you are not authorized to use this bot. Please contact the administrator for access."
-      );
-      return new Response("Unauthorized", { status: 403 });
-    }
-
     // Handle /start command
     if (message?.text === "/start") {
       await sendTelegramMessage(
         chatId,
-        "👋 Welcome to Voice-to-Text Bot!\n\nSend me a voice message, and I'll convert it to text for you."
+        "👋 Welcome to Voice-to-Text Bot!\n\nSend me a voice message, and I'll convert it to text for you.",
+        env
       );
       return new Response("OK");
     }
@@ -134,30 +154,35 @@ async function handleRequest(request) {
         // Send processing message
         await sendTelegramMessage(
           chatId,
-          "🎵 Processing your audio message..."
+          "🎵 Processing your audio message...",
+          env
         );
 
         // Download audio file
         const fileId = message.voice?.file_id || message.video_note?.file_id;
-        const audioData = await downloadVoiceFile(fileId);
+        const audioData = await downloadVoiceFile(fileId, env);
         await sendTelegramMessage(
           chatId,
           `📥 Audio file received:\n` +
             `Size: ${(audioData.size / 1024).toFixed(2)} KB\n` +
-            `Format: ${audioData.format}`
+            `Format: ${audioData.format}`,
+          env
         );
 
         // Transcribe using Whisper API
         await sendTelegramMessage(
           chatId,
-          "🔄 Sending to OpenAI for transcription..."
+          "🔄 Sending to OpenAI for transcription...",
+          env
         );
-        const transcription = await transcribeAudio(audioData);
+        const transcription = await transcribeAudio(audioData, env);
+        await recordUserUsage(message.from, env);
 
         // Send transcription back
         await sendTelegramMessage(
           chatId,
-          "✅ Transcription complete!\n\n" + "📝 Text:\n" + transcription
+          "✅ Transcription complete!\n\n" + "📝 Text:\n" + transcription,
+          env
         );
       } catch (error) {
         let errorMessage = "❌ Error Details:\n";
@@ -174,7 +199,7 @@ async function handleRequest(request) {
 
         errorMessage += `\nDebug info:\n${error.message}`;
 
-        await sendTelegramMessage(chatId, errorMessage);
+        await sendTelegramMessage(chatId, errorMessage, env);
       }
     }
 
