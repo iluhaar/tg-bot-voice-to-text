@@ -37,7 +37,7 @@ wrangler secret put OPENAI_API_KEY
 https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 ```
 
-The D1 database is configured as the `DB` binding in `wrangler.toml`. Each
+The D1 database is configured as the `users_binding` binding in `wrangler.toml`. Each
 successful transcription creates or updates the Telegram user and increments
 their `usage_count`.
 
