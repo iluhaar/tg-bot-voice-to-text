@@ -29,6 +29,7 @@ wrangler login
 ```bash
 wrangler secret put BOT_TOKEN
 wrangler secret put OPENAI_API_KEY
+wrangler secret put ALLOWED_CHAT_ID
 ```
 
 4. Set up your Telegram bot webhook:
@@ -39,7 +40,8 @@ https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 
 The D1 database is configured as the `users_binding` binding in `wrangler.toml`. Each
 successful transcription creates or updates the Telegram user and increments
-their `usage_count`.
+their `usage_count`. Users can transcribe five messages per 24-hour period;
+the chat configured by `ALLOWED_CHAT_ID` is exempt from this limit.
 
 ## Security Features
 
