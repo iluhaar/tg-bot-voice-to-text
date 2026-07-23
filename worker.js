@@ -105,15 +105,22 @@ async function recordUserUsage(user, env) {
       first_name,
       last_name,
       language_code,
-      usage_count
-    ) VALUES (?, ?, ?, ?, ?, 1)
+      usage_count,
+      last_used_at
+    ) VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
     ON CONFLICT (telegram_user_id) DO UPDATE SET
       username = excluded.username,
       first_name = excluded.first_name,
       last_name = excluded.last_name,
       language_code = excluded.language_code,
-      usage_count = users.usage_count + 1,
-      last_used_at = CURRENT_TIMESTAMP`
+      usage_count = CASE
+        WHEN users.last_used_at < datetime('now', '-1 day') THEN 1
+        ELSE users.usage_count + 1
+      END,
+      last_used_at = CASE
+        WHEN users.last_used_at < datetime('now', '-1 day') THEN CURRENT_TIMESTAMP
+        ELSE users.last_used_at
+      END`
   )
     .bind(
       user.id.toString(),
@@ -123,6 +130,19 @@ async function recordUserUsage(user, env) {
       user.language_code || null
     )
     .run();
+}
+
+async function hasReachedDailyLimit(userId, env) {
+  const user = await env.users_binding.prepare(
+    `SELECT 1 FROM users
+    WHERE telegram_user_id = ?
+      AND usage_count >= 5
+      AND last_used_at >= datetime('now', '-1 day')`
+  )
+    .bind(userId.toString())
+    .first();
+
+  return Boolean(user);
 }
 
 async function handleRequest(request, env) {
@@ -151,6 +171,22 @@ async function handleRequest(request, env) {
     // Handle voice messages and video notes
     if (message?.voice || message?.video_note) {
       try {
+        const isAllowedChat =
+          env.ALLOWED_CHAT_ID &&
+          chatId.toString() === env.ALLOWED_CHAT_ID.toString();
+
+        if (
+          !isAllowedChat &&
+          (await hasReachedDailyLimit(message.from.id, env))
+        ) {
+          await sendTelegramMessage(
+            chatId,
+            "⏳ You can transcribe up to 5 audio messages every 24 hours. Please try again later.",
+            env
+          );
+          return new Response("OK");
+        }
+
         // Send processing message
         await sendTelegramMessage(
           chatId,
