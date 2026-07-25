@@ -40,8 +40,19 @@ https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 
 The D1 database is configured as the `users_binding` binding in `wrangler.toml`. Each
 successful transcription creates or updates the Telegram user and increments
-their `usage_count`. Users can transcribe five messages per 24-hour period;
-the chat configured by `ALLOWED_CHAT_ID` is exempt from this limit.
+their 24-hour-window `usage_count` and lifetime `total_usage_count`. Users can
+transcribe five messages per 24-hour period; the chat configured by
+`ALLOWED_CHAT_ID` is exempt from this limit.
+
+For an existing database, apply migrations before deploying the worker:
+
+```bash
+wrangler d1 migrations apply voice-to-text-users --remote
+wrangler deploy
+```
+
+The initial total is seeded from the current `usage_count`; usage from earlier
+24-hour periods cannot be recovered because it was previously overwritten.
 
 ## Security Features
 
