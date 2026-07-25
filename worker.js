@@ -106,8 +106,9 @@ async function recordUserUsage(user, env) {
       last_name,
       language_code,
       usage_count,
+      total_usage_count,
       last_used_at
-    ) VALUES (?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, ?, ?, ?, 1, 1, CURRENT_TIMESTAMP)
     ON CONFLICT (telegram_user_id) DO UPDATE SET
       username = excluded.username,
       first_name = excluded.first_name,
@@ -117,6 +118,7 @@ async function recordUserUsage(user, env) {
         WHEN users.last_used_at < datetime('now', '-1 day') THEN 1
         ELSE users.usage_count + 1
       END,
+      total_usage_count = users.total_usage_count + 1,
       last_used_at = CASE
         WHEN users.last_used_at < datetime('now', '-1 day') THEN CURRENT_TIMESTAMP
         ELSE users.last_used_at
