@@ -1,6 +1,7 @@
-name = "voice-to-text-bot"
+name = "voice-to-text"
 main = "worker.js"
 compatibility_date = "2024-01-01"
+keep_vars = true
 
 [[d1_databases]]
 binding = "users_binding"
