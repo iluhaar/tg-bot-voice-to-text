@@ -134,19 +134,51 @@ async function recordUserUsage(user, env) {
     .run();
 }
 
-function isAllowedChat(chatId, env) {
+async function hasReachedDailyLimit(userId, env) {
+  const user = await env.users_binding.prepare(
+    `SELECT 1 FROM users
+    WHERE telegram_user_id = ?
+      AND usage_count >= 5
+      AND last_used_at >= datetime('now', '-1 day')`
+  )
+    .bind(userId.toString())
+    .first();
+
+  return Boolean(user);
+}
+
+function getAllowedChatIds(env) {
   let allowedChatIds;
 
   try {
-    allowedChatIds = Array.isArray(env.ALLOWED_CHAT_ID)
-      ? env.ALLOWED_CHAT_ID
-      : JSON.parse(env.ALLOWED_CHAT_ID || "[]");
+    if (Array.isArray(env.ALLOWED_CHAT_ID)) {
+      allowedChatIds = env.ALLOWED_CHAT_ID;
+    } else if (env.ALLOWED_CHAT_ID == null) {
+      return null;
+    } else {
+      allowedChatIds = JSON.parse(env.ALLOWED_CHAT_ID);
+    }
   } catch {
+    return null;
+  }
+
+  if (!Array.isArray(allowedChatIds)) {
+    return null;
+  }
+
+  return allowedChatIds;
+}
+
+function isAllowedChat(chatId, allowedChatIds) {
+  if (allowedChatIds === null) {
     return false;
   }
 
+  if (allowedChatIds.length === 0) {
+    return true;
+  }
+
   return (
-    Array.isArray(allowedChatIds) &&
     allowedChatIds.some(
       (allowedChatId) => allowedChatId?.toString() === chatId.toString()
     )
@@ -166,7 +198,8 @@ async function handleRequest(request, env) {
       return new Response("Missing chat ID", { status: 400 });
     }
 
-    const allowedChat = isAllowedChat(chatId, env);
+    const allowedChatIds = getAllowedChatIds(env);
+    const allowedChat = isAllowedChat(chatId, allowedChatIds);
 
     if (!allowedChat) {
       await sendTelegramMessage(
@@ -190,6 +223,18 @@ async function handleRequest(request, env) {
     // Handle voice messages and video notes
     if (message?.voice || message?.video_note) {
       try {
+        if (
+          allowedChatIds.length === 0 &&
+          (await hasReachedDailyLimit(message.from.id, env))
+        ) {
+          await sendTelegramMessage(
+            chatId,
+            "⏳ You can transcribe up to 5 audio messages every 24 hours. Please try again later.",
+            env
+          );
+          return new Response("OK");
+        }
+
         // Send processing message
         await sendTelegramMessage(
           chatId,
