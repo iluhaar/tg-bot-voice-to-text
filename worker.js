@@ -1,3 +1,8 @@
+const TRANSCRIPTION_MODEL = "whisper-1";
+// Bump this version when transcription options change.
+const TRANSCRIPTION_VERSION = `${TRANSCRIPTION_MODEL}:v1`;
+const TRANSCRIPTION_CLAIM_SECONDS = 300;
+
 export default {
   fetch(request, env) {
     return handleRequest(request, env);
@@ -36,7 +41,7 @@ async function transcribeAudio(audioData, env) {
   const formData = new FormData();
   const audioBlob = new Blob([audioData.buffer], { type: "audio/ogg" });
   formData.append("file", audioBlob, "voice.oga");
-  formData.append("model", "whisper-1");
+  formData.append("model", TRANSCRIPTION_MODEL);
 
   const response = await fetch(
     "https://api.openai.com/v1/audio/transcriptions",
@@ -46,6 +51,7 @@ async function transcribeAudio(audioData, env) {
         Authorization: `Bearer ${env.OPENAI_API_KEY}`,
       },
       body: formData,
+      signal: AbortSignal.timeout(120_000),
     }
   );
 
@@ -174,6 +180,45 @@ async function hasReachedDailyLimit(userId, env) {
   return Boolean(user);
 }
 
+async function getCachedTranscription(fileUniqueId, env) {
+  if (!fileUniqueId) return null;
+  const cached = await env.users_binding.prepare(
+    `SELECT transcription FROM transcription_cache
+     WHERE file_unique_id = ? AND model_version = ?`
+  ).bind(fileUniqueId, TRANSCRIPTION_VERSION).first();
+  return cached?.transcription ?? null;
+}
+
+async function claimTranscription(fileUniqueId, token, env) {
+  const result = await env.users_binding.prepare(
+    `INSERT INTO transcription_cache
+       (file_unique_id, model_version, claim_token, claimed_at)
+     VALUES (?, ?, ?, unixepoch())
+     ON CONFLICT (file_unique_id, model_version) DO UPDATE SET
+       claim_token = excluded.claim_token,
+       claimed_at = excluded.claimed_at
+     WHERE transcription_cache.transcription IS NULL
+       AND transcription_cache.claimed_at < unixepoch() - ?`
+  ).bind(
+    fileUniqueId, TRANSCRIPTION_VERSION, token, TRANSCRIPTION_CLAIM_SECONDS
+  ).run();
+  return result.meta.changes === 1;
+}
+
+async function releaseTranscriptionClaim(fileUniqueId, token, env) {
+  await env.users_binding.prepare(
+    `DELETE FROM transcription_cache
+     WHERE file_unique_id = ? AND model_version = ?
+       AND claim_token = ? AND transcription IS NULL`
+  ).bind(fileUniqueId, TRANSCRIPTION_VERSION, token).run();
+}
+
+function formatTranscription(transcription) {
+  return "✅ Transcription complete!\n\n📝 Text:\n" +
+    transcription.replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
 function getAllowedChatIds(env) {
   let allowedChatIds;
 
@@ -300,8 +345,25 @@ async function handleRequest(request, env) {
     // Handle voice messages and video notes
     if (audioMessage.voice || audioMessage.video_note) {
       let processingMessageId;
+      const media = audioMessage.voice || audioMessage.video_note;
+      const fileUniqueId = media.file_unique_id;
+      let claimToken;
+      const replyOptions = isGroup ? {
+        reply_parameters: { message_id: audioMessage.message_id },
+        ...(message.message_thread_id != null
+          ? { message_thread_id: message.message_thread_id }
+          : {}),
+      } : {};
 
       try {
+        const cached = await getCachedTranscription(fileUniqueId, env);
+        if (cached !== null) {
+          await sendTelegramMessage(
+            chatId, formatTranscription(cached), env, replyOptions
+          );
+          return new Response("OK");
+        }
+
         if (
           allowedChatIds.length === 0 &&
           (await hasReachedDailyLimit(message.from.id, env))
@@ -314,17 +376,30 @@ async function handleRequest(request, env) {
           return new Response("OK");
         }
 
+        if (fileUniqueId) {
+          const token = crypto.randomUUID();
+          if (!(await claimTranscription(fileUniqueId, token, env))) {
+            // The first request may have completed since our initial lookup.
+            const completed = await getCachedTranscription(fileUniqueId, env);
+            await sendTelegramMessage(
+              chatId,
+              completed !== null
+                ? formatTranscription(completed)
+                : "⏳ This audio is already being transcribed. Please try again shortly.",
+              env,
+              replyOptions
+            );
+            return new Response("OK");
+          }
+          claimToken = token;
+        }
+
         // Send processing message
         processingMessageId = await sendTelegramMessage(
           chatId,
           "🎵 Processing your audio message...",
           env,
-          isGroup ? {
-            reply_parameters: { message_id: audioMessage.message_id },
-            ...(message.message_thread_id != null
-              ? { message_thread_id: message.message_thread_id }
-              : {}),
-          } : {}
+          replyOptions
         );
 
         // Download audio file
@@ -347,15 +422,22 @@ async function handleRequest(request, env) {
           env
         );
         const transcription = await transcribeAudio(audioData, env);
+        if (claimToken) {
+          await env.users_binding.prepare(
+            `UPDATE transcription_cache
+             SET transcription = ?, claim_token = NULL, claimed_at = NULL
+             WHERE file_unique_id = ? AND model_version = ? AND claim_token = ?`
+          ).bind(
+            transcription, fileUniqueId, TRANSCRIPTION_VERSION, claimToken
+          ).run();
+        }
         await recordUserUsage(message.from, env);
 
         // Send transcription back
         await editTelegramMessage(
           chatId,
           processingMessageId,
-          "✅ Transcription complete!\n\n" + "📝 Text:\n" +
-            transcription.replaceAll("&", "&amp;")
-              .replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
+          formatTranscription(transcription),
           env
         );
       } catch (error) {
@@ -382,6 +464,10 @@ async function handleRequest(request, env) {
           );
         } else {
           await sendTelegramMessage(chatId, errorMessage, env);
+        }
+      } finally {
+        if (claimToken) {
+          await releaseTranscriptionClaim(fileUniqueId, claimToken, env);
         }
       }
     }

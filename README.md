@@ -42,7 +42,7 @@ https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=<YOUR_WORKER_URL>
 ```
 
 The D1 database is configured as the `users_binding` binding in `wrangler.toml`. Each
-successful transcription creates or updates the Telegram user and increments
+successful new transcription creates or updates the Telegram user and increments
 their 24-hour-window `usage_count` and lifetime `total_usage_count`. Users can
 transcribe five messages per 24-hour period; chats listed in
 `ALLOWED_CHAT_ID` are exempt from this limit.
@@ -80,6 +80,26 @@ wrangler deploy
 - Stores user profiles and usage counts in Cloudflare D1
 - On-demand group transcription by replying to a voice message and mentioning the bot
 - Updates a single progress message with the final transcript
+- Reuses saved transcripts for repeated Telegram files without another OpenAI call
+
+### Transcription cache
+
+Successful transcripts are stored in D1, keyed by Telegram's `file_unique_id`
+and the transcription model/version. Cache hits skip the audio download and
+OpenAI request and do not count toward either usage counter. They remain
+available even after the user's daily limit is reached.
+
+The cache is shared across authorized chats and has no automatic expiry.
+Only transcript text and cache metadata are stored, not audio. Separately
+re-uploaded audio may have a different Telegram ID and is not content-hashed.
+
+A database claim prevents simultaneous requests for the same file from
+both calling OpenAI. Other requesters are asked to retry shortly. Failed
+requests release their claim; abandoned claims can be retried after five
+minutes. The OpenAI request times out after two minutes.
+
+Apply `0002_add_transcription_cache.sql` using the migration command above
+before deploying this version.
 
 ## Using the bot in groups
 
@@ -115,13 +135,13 @@ Both username mentions and linked bot-name mentions are supported.
 ## How it Works
 
 1. The bot receives private audio or a group reply mentioning it through Telegram's webhook
-2. Downloads the voice file using Telegram's getFile API
-3. Sends the audio file to OpenAI's Whisper API for transcription
+2. Returns a saved transcript if the Telegram file has already been transcribed
+3. Otherwise downloads the file, transcribes it using OpenAI, and saves the transcript
 4. Replaces the progress message with the transcript, replying to the original audio in groups
 
 ## Security Notes
 
 - Environment variables are securely stored in Cloudflare Workers
 - No file system access required
-- All processing happens in memory
+- Audio processing happens in memory; transcripts are cached in D1
 - Automatic HTTPS handling by Cloudflare
