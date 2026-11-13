@@ -78,13 +78,46 @@ wrangler deploy
 - Minimal resource usage
 - Automatic scaling
 - Stores user profiles and usage counts in Cloudflare D1
+- On-demand group transcription by replying to a voice message and mentioning the bot
+- Updates a single progress message with the final transcript
+
+## Using the bot in groups
+
+1. Add the bot to your group. If `ALLOWED_CHAT_ID` is not `[]`, include the
+   group's chat ID (not your personal user ID) in that JSON array.
+2. For plain `@YourBot` mentions, disable Group Privacy through BotFather
+   (`/setprivacy`). Telegram may require removing and re-adding the bot for
+   this change to take effect. The bot needs permission to send messages.
+3. Reply to a voice message or circle video with `@YourBot`, or use
+   `/transcribe@YourBot`. The addressed command works with privacy mode enabled
+   for ordinary user messages; Telegram may route replies to another bot's
+   messages to that bot instead.
+
+The bot ignores other group messages, including voice messages without a
+request. The transcript appears as a reply to the original audio, in the same
+topic when applicable. Usage is charged to the person requesting transcription,
+not the original sender. Private chats still transcribe audio automatically.
+The bot discovers its username through Telegram, so no extra secret is needed.
+Both username mentions and linked bot-name mentions are supported.
+
+### Troubleshooting
+
+- **Not authorized:** add the group's chat ID to `ALLOWED_CHAT_ID`, preserving
+  existing IDs. Personal chat IDs do not authorize groups. An empty array (`[]`)
+  allows all chats with the per-user daily limit.
+- **Command works but mention does not:** confirm Group Privacy is disabled
+  for the same bot, remove and re-add it if necessary, and reply to the original
+  audio with its exact `@username`. Try `/transcribe@YourBot` as a fallback.
+  If mentions still fail, inspect Worker logs to check delivery and errors.
+- **No response:** confirm the current code is deployed, the webhook targets
+  that Worker, and the bot can send messages in the group.
 
 ## How it Works
 
-1. The bot receives a voice message through Telegram's webhook
+1. The bot receives private audio or a group reply mentioning it through Telegram's webhook
 2. Downloads the voice file using Telegram's getFile API
 3. Sends the audio file to OpenAI's Whisper API for transcription
-4. Returns the transcribed text to the user
+4. Replaces the progress message with the transcript, replying to the original audio in groups
 
 ## Security Notes
 

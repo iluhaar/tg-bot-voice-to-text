@@ -75,7 +75,7 @@ async function transcribeAudio(audioData, env) {
   return result.text;
 }
 
-async function sendTelegramMessage(chatId, text, env) {
+async function sendTelegramMessage(chatId, text, env, options = {}) {
   const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`;
   const response = await fetch(url, {
     method: "POST",
@@ -86,6 +86,7 @@ async function sendTelegramMessage(chatId, text, env) {
       chat_id: chatId,
       text: text,
       parse_mode: "HTML",
+      ...options,
     }),
   });
 
@@ -93,6 +94,32 @@ async function sendTelegramMessage(chatId, text, env) {
     const errorData = await response.json().catch(() => null);
     throw new Error(
       `📤 Message Send Error:\n${JSON.stringify(errorData, null, 2)}`
+    );
+  }
+
+  const data = await response.json();
+  return data.result.message_id;
+}
+
+async function editTelegramMessage(chatId, messageId, text, env) {
+  const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/editMessageText`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      text: text,
+      parse_mode: "HTML",
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    throw new Error(
+      `📝 Message Edit Error:\n${JSON.stringify(errorData, null, 2)}`
     );
   }
 }
@@ -185,6 +212,39 @@ function isAllowedChat(chatId, allowedChatIds) {
   );
 }
 
+async function mentionsBot(message, env) {
+  const entities = message.entities || [];
+  const mentionedUsers = entities
+    .filter((entity) => entity.type === "text_mention")
+    .map((entity) => entity.user?.id);
+  const references = entities
+    .filter((entity) =>
+      entity.type === "mention" || entity.type === "bot_command"
+    )
+    .map((entity) =>
+      message.text.slice(entity.offset, entity.offset + entity.length).toLowerCase()
+    );
+
+  if (references.length === 0 && mentionedUsers.length === 0) {
+    return false;
+  }
+
+  const response = await fetch(
+    `https://api.telegram.org/bot${env.BOT_TOKEN}/getMe`
+  );
+  const data = await response.json();
+  if (!response.ok || !data.ok || !data.result?.username) {
+    throw new Error("Failed to get bot username from Telegram");
+  }
+
+  const username = data.result.username.toLowerCase();
+  return mentionedUsers.some((id) => id != null && id === data.result.id) ||
+    references.some((reference) =>
+      reference === `@${username}` ||
+      reference === `/transcribe@${username}`
+    );
+}
+
 async function handleRequest(request, env) {
   if (request.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -194,8 +254,25 @@ async function handleRequest(request, env) {
     const { message } = await request.json();
     const chatId = message?.chat?.id;
 
-    if (!chatId) {
-      return new Response("Missing chat ID", { status: 400 });
+    if (!message || !chatId) {
+      // Telegram also sends membership changes and other non-message updates.
+      return new Response("OK");
+    }
+
+    const isGroup = message.chat.type === "group" ||
+      message.chat.type === "supergroup";
+    let audioMessage = message;
+
+    if (isGroup) {
+      audioMessage = message.reply_to_message;
+      if (
+        !(audioMessage?.voice || audioMessage?.video_note) ||
+        !(await mentionsBot(message, env))
+      ) {
+        return new Response("OK");
+      }
+    } else if (message.chat.type !== "private") {
+      return new Response("OK");
     }
 
     const allowedChatIds = getAllowedChatIds(env);
@@ -221,7 +298,9 @@ async function handleRequest(request, env) {
     }
 
     // Handle voice messages and video notes
-    if (message?.voice || message?.video_note) {
+    if (audioMessage.voice || audioMessage.video_note) {
+      let processingMessageId;
+
       try {
         if (
           allowedChatIds.length === 0 &&
@@ -236,17 +315,24 @@ async function handleRequest(request, env) {
         }
 
         // Send processing message
-        await sendTelegramMessage(
+        processingMessageId = await sendTelegramMessage(
           chatId,
           "🎵 Processing your audio message...",
-          env
+          env,
+          isGroup ? {
+            reply_parameters: { message_id: audioMessage.message_id },
+            ...(message.message_thread_id != null
+              ? { message_thread_id: message.message_thread_id }
+              : {}),
+          } : {}
         );
 
         // Download audio file
-        const fileId = message.voice?.file_id || message.video_note?.file_id;
+        const fileId = audioMessage.voice?.file_id || audioMessage.video_note?.file_id;
         const audioData = await downloadVoiceFile(fileId, env);
-        await sendTelegramMessage(
+        await editTelegramMessage(
           chatId,
+          processingMessageId,
           `📥 Audio file received:\n` +
             `Size: ${(audioData.size / 1024).toFixed(2)} KB\n` +
             `Format: ${audioData.format}`,
@@ -254,8 +340,9 @@ async function handleRequest(request, env) {
         );
 
         // Transcribe using Whisper API
-        await sendTelegramMessage(
+        await editTelegramMessage(
           chatId,
+          processingMessageId,
           "🔄 Sending to OpenAI for transcription...",
           env
         );
@@ -263,9 +350,12 @@ async function handleRequest(request, env) {
         await recordUserUsage(message.from, env);
 
         // Send transcription back
-        await sendTelegramMessage(
+        await editTelegramMessage(
           chatId,
-          "✅ Transcription complete!\n\n" + "📝 Text:\n" + transcription,
+          processingMessageId,
+          "✅ Transcription complete!\n\n" + "📝 Text:\n" +
+            transcription.replaceAll("&", "&amp;")
+              .replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
           env
         );
       } catch (error) {
@@ -283,7 +373,16 @@ async function handleRequest(request, env) {
 
         errorMessage += `\nDebug info:\n${error.message}`;
 
-        await sendTelegramMessage(chatId, errorMessage, env);
+        if (processingMessageId) {
+          await editTelegramMessage(
+            chatId,
+            processingMessageId,
+            errorMessage,
+            env
+          );
+        } else {
+          await sendTelegramMessage(chatId, errorMessage, env);
+        }
       }
     }
 
